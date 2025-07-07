@@ -108,6 +108,8 @@ class ArView(
                 "snapshot" -> handleSnapshot(result)
                 "disableCamera" -> handleDisableCamera(result)
                 "enableCamera" -> handleEnableCamera(result)
+                "getCameraIntrinsics" -> handleGetCameraIntrinsics(result)
+                "captureRawImage" -> handleCaptureRawImage(result)
                 else -> result.notImplemented()
             }
         }
@@ -791,33 +793,21 @@ class ArView(
     }
 
     private fun handleGetCameraPose(result: MethodChannel.Result) {
-        try {
-            val frame = sceneView.session?.update()
-            val cameraPose = frame?.camera?.pose
-            if (cameraPose != null) {
-                val poseData =
-                    mapOf(
-                        "position" to
-                            mapOf(
-                                "x" to cameraPose.tx(),
-                                "y" to cameraPose.ty(),
-                                "z" to cameraPose.tz(),
-                            ),
-                        "rotation" to
-                            mapOf(
-                                "x" to cameraPose.rotationQuaternion[0],
-                                "y" to cameraPose.rotationQuaternion[1],
-                                "z" to cameraPose.rotationQuaternion[2],
-                                "w" to cameraPose.rotationQuaternion[3],
-                            ),
-                    )
-                result.success(poseData)
-            } else {
-                result.error("NO_CAMERA_POSE", "Camera pose is not available", null)
-            }
-        } catch (e: Exception) {
-            result.error("CAMERA_POSE_ERROR", e.message, null)
+    try {
+        val frame = sceneView.session?.update()
+        val cameraPose = frame?.camera?.pose
+        if (cameraPose != null) {
+            val matrix = FloatArray(16)
+            cameraPose.toMatrix(matrix, 0)
+            // Convert to List<Double> for Dart
+            val poseList = matrix.map { it.toDouble() }
+            result.success(poseList)
+        } else {
+            result.error("NO_CAMERA_POSE", "Camera pose is not available", null)
         }
+    } catch (e: Exception) {
+        result.error("CAMERA_POSE_ERROR", e.message, null)
+    }
     }
 
     private fun handleGetAnchorPose(
@@ -1137,6 +1127,35 @@ class ArView(
         }
     }
 
+    private fun handleGetCameraIntrinsics(result: MethodChannel.Result) {
+        try {
+            val frame = sceneView.session?.update()
+            val camera = frame?.camera
+            val intrinsics = camera?.imageIntrinsics
+            if (intrinsics != null) {
+                val fx = intrinsics.focalLength[0]
+                val fy = intrinsics.focalLength[1]
+                val cx = intrinsics.principalPoint[0]
+                val cy = intrinsics.principalPoint[1]
+                val width = intrinsics.imageDimensions[0]
+                val height = intrinsics.imageDimensions[1]
+                val map = mapOf(
+                    "fx" to fx,
+                    "fy" to fy,
+                    "cx" to cx,
+                    "cy" to cy,
+                    "width" to width,
+                    "height" to height
+                )
+                result.success(map)
+            } else {
+                result.error("NO_INTRINSICS", "Camera intrinsics not available", null)
+            }
+        } catch (e: Exception) {
+            result.error("INTRINSICS_ERROR", e.message, null)
+        }
+    }
+
     override fun getView(): View = rootLayout
 
     override fun dispose() {
@@ -1327,5 +1346,97 @@ class ArView(
         }
     }
 
-    
+    private fun handleCaptureRawImage(result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                val frame = sceneView.session?.update()
+                val image = frame?.acquireCameraImage()
+                if (image != null) {
+                    try {
+                        // Convert YUV_420_888 to NV21
+                        val nv21 = yuv420ToNv21(image)
+
+                        // Create YuvImage from NV21 data
+                        val yuvImage = android.graphics.YuvImage(
+                            nv21,
+                            android.graphics.ImageFormat.NV21,
+                            image.width,
+                            image.height,
+                            null
+                        )
+
+                        // Compress YUV to JPEG
+                        val out = java.io.ByteArrayOutputStream()
+                        yuvImage.compressToJpeg(
+                            android.graphics.Rect(0, 0, image.width, image.height),
+                            95,
+                            out
+                        )
+
+                        val jpegBytes = out.toByteArray()
+                        result.success(jpegBytes)
+
+                    } catch (e: Exception) {
+                        result.error("CAPTURE_RAW_IMAGE_ERROR", e.message, null)
+                    } finally {
+                        image.close()
+                    }
+                } else {
+                    result.error("NO_CAMERA_IMAGE", "Camera image not available", null)
+                }
+            }
+        } catch (e: Exception) {
+            result.error("CAPTURE_RAW_IMAGE_ERROR", e.message, null)
+        }
+    }
+
+    private fun yuv420ToNv21(image: android.media.Image): ByteArray {
+        val width = image.width
+        val height = image.height
+        val ySize = width * height
+        val uvSize = width * height / 2
+        val nv21 = ByteArray(ySize + uvSize)
+
+        val yBuffer = image.planes[0].buffer
+        val uBuffer = image.planes[1].buffer
+        val vBuffer = image.planes[2].buffer
+
+        val yRowStride = image.planes[0].rowStride
+        val yPixelStride = image.planes[0].pixelStride
+
+        val uRowStride = image.planes[1].rowStride
+        val uPixelStride = image.planes[1].pixelStride
+
+        val vRowStride = image.planes[2].rowStride
+        val vPixelStride = image.planes[2].pixelStride
+
+        var pos = 0
+
+        // Copy Y plane
+        for (row in 0 until height) {
+            var yPos = row * yRowStride
+            for (col in 0 until width) {
+                nv21[pos++] = yBuffer.get(yPos)
+                yPos += yPixelStride
+            }
+        }
+
+        // Interleave VU data into NV21 format
+        val uvHeight = height / 2
+        val uvWidth = width / 2
+        for (row in 0 until uvHeight) {
+            var uPos = row * uRowStride
+            var vPos = row * vRowStride
+            for (col in 0 until uvWidth) {
+                val v = vBuffer.get(vPos)
+                val u = uBuffer.get(uPos)
+                nv21[pos++] = v
+                nv21[pos++] = u
+                uPos += uPixelStride
+                vPos += vPixelStride
+            }
+        }
+
+        return nv21
+    }
 }
