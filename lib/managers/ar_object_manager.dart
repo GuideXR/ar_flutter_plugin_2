@@ -1,10 +1,7 @@
-import 'dart:typed_data';
-
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
 import 'package:ar_flutter_plugin_2/models/ar_node.dart';
 import 'package:ar_flutter_plugin_2/utils/json_converters.dart';
 import 'package:flutter/services.dart';
-import 'package:vector_math/vector_math_64.dart';
 
 // Type definitions to enforce a consistent use of the API
 typedef NodeTapResultHandler = void Function(List<String> nodes);
@@ -144,5 +141,25 @@ class ARObjectManager {
   /// Remove given node from the AR Scene
   removeNode(ARNode node) {
     _channel.invokeMethod<String>('removeNode', {'name': node.name});
+  }
+
+  Future<bool?> enableLookAt(String nodeName) async {
+    try {
+      return await _channel.invokeMethod<bool>('enableLookAt', {
+        'nodeName': nodeName,
+      });
+    } catch (e) {
+      print('Error enabling look-at: $e');
+      return false;
+    }
+  }
+
+  Future<bool?> disableLookAt() async {
+    try {
+      return await _channel.invokeMethod<bool>('disableLookAt');
+    } catch (e) {
+      print('Error disabling look-at: $e');
+      return false;
+    }
   }
 }

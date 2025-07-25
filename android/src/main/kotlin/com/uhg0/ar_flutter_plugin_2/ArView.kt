@@ -36,6 +36,8 @@ import io.github.sceneview.gesture.MoveGestureDetector
 import io.github.sceneview.gesture.RotateGestureDetector
 import io.github.sceneview.math.Position
 import io.github.sceneview.math.Transform
+import io.github.sceneview.math.lookTowards
+import io.github.sceneview.math.toRotation
 import io.github.sceneview.model.ModelInstance
 import io.github.sceneview.node.ModelNode
 import io.github.sceneview.node.Node
@@ -46,17 +48,17 @@ import kotlinx.coroutines.withContext
 import io.github.sceneview.math.Position as ScenePosition
 import io.github.sceneview.math.Rotation as SceneRotation
 import io.github.sceneview.math.Scale as SceneScale
-import io.github.sceneview.texture.ImageTexture
-import io.github.sceneview.material.setTexture
-import io.github.sceneview.ar.scene.PlaneRenderer
-import io.flutter.FlutterInjector
+import io.github.sceneview.math.colorOf
+import io.github.sceneview.loaders.MaterialLoader
+import com.google.ar.core.exceptions.SessionPausedException
 import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.math.Direction
 import io.github.sceneview.math.Rotation
 import io.github.sceneview.math.Scale
-import io.github.sceneview.math.colorOf
-import io.github.sceneview.loaders.MaterialLoader
-import com.google.ar.core.exceptions.SessionPausedException
+import io.github.sceneview.texture.ImageTexture
+import io.github.sceneview.material.setTexture
+import io.github.sceneview.ar.scene.PlaneRenderer
+import io.flutter.FlutterInjector
 
 class ArView(
     context: Context,
@@ -90,6 +92,9 @@ class ArView(
     private var handlePans = false  
     private var handleRotation = false
     private var isSessionPaused = false
+
+    private var lookAtEnabled = false
+    private var lookAtNodeName: String? = null
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -148,6 +153,8 @@ class ArView(
                 "transformationChanged" -> {
                     handleTransformNode(call, result)
                 }
+                "enableLookAt" -> handleEnableLookAt(call, result)
+                "disableLookAt" -> handleDisableLookAt(result)
                 else -> result.notImplemented()
             }
         }
@@ -469,6 +476,10 @@ class ArView(
                                             }
                                         }
                                     }
+                                }
+
+                                if (lookAtEnabled && lookAtNodeName != null) {
+                                    updateLookAtRotation(frame)
                                 }
 
                                 frame.getUpdatedTrackables(Plane::class.java).forEach { plane ->
@@ -1438,5 +1449,71 @@ class ArView(
         }
 
         return nv21
+    }
+
+    private fun handleEnableLookAt(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val nodeName = call.argument<String>("nodeName")
+            if (nodeName != null && nodesMap.containsKey(nodeName)) {
+                lookAtEnabled = true
+                lookAtNodeName = nodeName
+                result.success(true)
+            } else {
+                result.error("NODE_NOT_FOUND", "Node not found for look-at", null)
+            }
+        } catch (e: Exception) {
+            result.error("ENABLE_LOOKAT_ERROR", e.message, null)
+        }
+    }
+
+    private fun handleDisableLookAt(result: MethodChannel.Result) {
+        try {
+            lookAtEnabled = false
+            lookAtNodeName = null
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("DISABLE_LOOKAT_ERROR", e.message, null)
+        }
+    }
+
+    private fun updateLookAtRotation(frame: Frame) {
+        try {
+            lookAtNodeName?.let { nodeName ->
+                nodesMap[nodeName]?.let { node ->
+                    val cameraPose = frame.camera.pose
+                    val cameraPosition = Position(
+                        cameraPose.tx(),
+                        cameraPose.ty(),
+                        cameraPose.tz()
+                    )
+                    val nodeWorldPosition = node.worldPosition
+
+                    // Calculate direction vector from node to camera using custom normalization
+                    val direction = normalizeVector(nodeWorldPosition - cameraPosition)
+
+                    // Use SceneView's lookTowards to get the quaternion
+                    val lookAtQuaternion = lookTowards(nodeWorldPosition, direction)
+
+                    // Convert quaternion to Euler angles (Float3) for node.rotation
+                    node.rotation = lookAtQuaternion.toRotation()
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Look-at update failed: ${e.message}")
+        }
+    }
+
+    // Custom vector normalization for Position
+    private fun normalizeVector(v: Position): Position {
+        val length = Math.sqrt((v.x * v.x + v.y * v.y + v.z * v.z).toDouble())
+        return if (length != 0.0) {
+            Position(
+                (v.x / length).toFloat(),
+                (v.y / length).toFloat(),
+                (v.z / length).toFloat()
+            )
+        } else {
+            v
+        }
     }
 }
