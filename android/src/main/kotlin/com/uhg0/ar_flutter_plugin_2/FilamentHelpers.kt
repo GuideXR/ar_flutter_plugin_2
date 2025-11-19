@@ -1,12 +1,13 @@
 package com.uhg0.ar_flutter_plugin_2
 
-import android.content.Context
 import com.google.android.filament.*
-import io.github.sceneview.loaders.MaterialLoader
-import io.github.sceneview.math.colorOf
 import io.github.sceneview.node.Node
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import io.github.sceneview.loaders.MaterialLoader
+import io.github.sceneview.math.colorOf
+import android.content.Context
+
 
 /**
  * Helper functions for creating Filament primitives and materials
@@ -14,10 +15,9 @@ import java.nio.ByteOrder
  */
 
 /**
- * Creates a transparent material instance using SceneView's MaterialLoader
- * Uses MaterialLoader.createColorInstance which is the correct way for SceneView
+ * Creates a transparent material instance using Filament's Material.Builder
+ * DO NOT use MaterialLoader.createColorInstance - it will NEVER produce transparency correctly
  * @param engine Filament Engine instance
- * @param context Android Context
  * @param color RGB color as Int (0xRRGGBB)
  * @param opacity Opacity value (0.0 to 1.0)
  * @return MaterialInstance with transparent blending
@@ -28,21 +28,23 @@ fun createTransparentMaterial(
     color: Int,
     opacity: Float
 ): MaterialInstance {
-    // Extract RGB components
+
     val r = ((color shr 16) and 0xFF) / 255f
     val g = ((color shr 8) and 0xFF) / 255f
     val b = (color and 0xFF) / 255f
-    
+
     val materialLoader = MaterialLoader(engine, context)
-    
-    // Use SceneView's MaterialLoader.createColorInstance with alpha for transparency
-    // This uses a built-in compiled material that supports transparency
+
+    // This material supports rgba directly and *will* render with proper transparency
     return materialLoader.createColorInstance(
         color = colorOf(r, g, b, opacity),
         metallic = 0.0f,
         roughness = 0.5f
     )
 }
+
+
+
 
 /**
  * Creates cube geometry using Filament's low-level APIs
@@ -188,10 +190,11 @@ fun createCubeRenderable(
         0f, 1f,  // 23
     )
     
-    // Create vertex buffer with 3 buffers: position, normal, UV
+    // Create vertex buffer with 3 buffers: position, tangents, UV
+    // MaterialLoader.createColorInstance requires TANGENTS attribute for PBR materials
     val vertexBuffer = VertexBuffer.Builder()
         .vertexCount(24) // 24 vertices (4 per face × 6 faces)
-        .bufferCount(3) // Position, Normal, UV
+        .bufferCount(3) // Position (0), Tangents (1), UV (2)
         .attribute(
             VertexBuffer.VertexAttribute.POSITION,
             0,
@@ -200,12 +203,13 @@ fun createCubeRenderable(
             0
         )
         .attribute(
-            VertexBuffer.VertexAttribute.NORMAL,
+            VertexBuffer.VertexAttribute.TANGENTS,
             1,
-            VertexBuffer.AttributeType.FLOAT3,
+            VertexBuffer.AttributeType.FLOAT4,
             0,
             0
         )
+        .normalized(VertexBuffer.VertexAttribute.TANGENTS)
         .attribute(
             VertexBuffer.VertexAttribute.UV0,
             2,
@@ -227,16 +231,52 @@ fun createCubeRenderable(
         vertexBufferData.rewind()
     )
     
-    // Upload normal data (buffer 1)
-    val normalBufferData = ByteBuffer
-        .allocateDirect(normals.size * 4)
+    // Generate tangents (Float4: tangent.x, tangent.y, tangent.z, handedness)
+    // For a cube, we can compute simple tangents based on face orientation
+    val tangents = FloatArray(24 * 4) // 24 vertices × 4 components
+    for (i in 0 until 24) {
+        val normalIndex = i * 3
+        val nx = normals[normalIndex]
+        val ny = normals[normalIndex + 1]
+        val nz = normals[normalIndex + 2]
+        
+        // Compute tangent: perpendicular to normal, pointing in U direction
+        // For each face, tangent points along the U axis direction
+        val tangentIndex = i * 4
+        when {
+            // Front/Back faces: tangent along X axis
+            kotlin.math.abs(nz) > 0.5f -> {
+                tangents[tangentIndex] = 1f
+                tangents[tangentIndex + 1] = 0f
+                tangents[tangentIndex + 2] = 0f
+            }
+            // Left/Right faces: tangent along Z axis
+            kotlin.math.abs(nx) > 0.5f -> {
+                tangents[tangentIndex] = 0f
+                tangents[tangentIndex + 1] = 0f
+                tangents[tangentIndex + 2] = if (nx > 0) -1f else 1f
+            }
+            // Top/Bottom faces: tangent along X axis
+            else -> {
+                tangents[tangentIndex] = 1f
+                tangents[tangentIndex + 1] = 0f
+                tangents[tangentIndex + 2] = 0f
+            }
+        }
+        // Handedness (w component): typically 1.0 for right-handed coordinate system
+        tangents[tangentIndex + 3] = 1f
+    }
+    
+    // Upload tangent data (buffer 1)
+    val tangentBufferData = ByteBuffer
+        .allocateDirect(tangents.size * 4)
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
-        .put(normals)
+        .put(tangents)
     vertexBuffer.setBufferAt(
         engine,
         1,
-        normalBufferData.rewind()
+        tangentBufferData.rewind()
     )
     
     // Upload UV data (buffer 2)
@@ -252,28 +292,31 @@ fun createCubeRenderable(
     )
     
     // Create index buffer
+    // Convert short indices to int for UINT type
+    val intIndices = IntArray(indices.size) { indices[it].toInt() }
     val indexBuffer = IndexBuffer.Builder()
-        .indexCount(indices.size)
-        .bufferType(IndexBuffer.Builder.IndexType.SHORT)
+        .indexCount(intIndices.size)
+        .bufferType(IndexBuffer.Builder.IndexType.UINT)
         .build(engine)
     
     val indexBufferData = ByteBuffer
-        .allocateDirect(indices.size * 2)
+        .allocateDirect(intIndices.size * 4)
         .order(ByteOrder.nativeOrder())
-        .asShortBuffer()
-        .put(indices)
+        .asIntBuffer()
+        .put(intIndices)
     indexBuffer.setBuffer(engine, indexBufferData.rewind())
     
     // Create renderable
-    val renderableBuilder = RenderableManager.Builder(1)
-        .boundingBox(
-            Box(
-                center = Float3(0f, 0f, 0f),
-                halfExtent = Float3(halfWidth, halfHeight, halfDepth)
-            )
-        )
+    // Box constructor: Box(center: FloatArray, halfExtent: FloatArray)
+    // Center is at origin (0, 0, 0), halfExtent is (halfWidth, halfHeight, halfDepth)
+    val center = floatArrayOf(0f, 0f, 0f)
+    val halfExtent = floatArrayOf(halfWidth, halfHeight, halfDepth)
+    val box = Box(center, halfExtent)
+    
+    RenderableManager.Builder(1)
+        .boundingBox(box)
         .material(0, materialInstance)
-        .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vertexBuffer, indexBuffer, 0, indices.size)
+        .geometry(0, RenderableManager.PrimitiveType.TRIANGLES, vertexBuffer, indexBuffer, 0, intIndices.size)
         .culling(false) // Disable culling for transparency
         .castShadows(false)
         .receiveShadows(false)
@@ -292,17 +335,31 @@ fun destroyRenderable(engine: Engine, entity: Int) {
 
 /**
  * Creates a SceneView Node with the Filament entity attached
- * Uses SceneView's built-in renderableEntity property to attach the entity
  * @param engine Filament Engine instance
+ * @param scene Filament Scene instance
  * @param entity Filament renderable entity ID
- * @return Node with the entity attached via renderableEntity property
+ * @return Node with entity attached and added to scene
  */
 fun createCubeNode(
     engine: Engine,
+    scene: com.google.android.filament.Scene,
     entity: Int
 ): Node {
-    val node = Node(engine = engine)
-    node.renderableEntity = entity  // REQUIRED: Attach Filament entity using SceneView's built-in API
-    return node
+    // CRITICAL: Add entity to Filament scene - required for rendering
+    scene.addEntity(entity)
+    
+    // Create Node for transform management
+    // The entity is already in the scene and will render
+    // The Node is used to manage position/rotation transforms
+    return Node(engine = engine)
 }
 
+
+
+// Just for your info i got this thing from the ref 
+
+// https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-cube/index.html 
+// https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-geometry/index.html 
+// https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-shape/index.html 
+
+// Can we able to take this and achedive our target or whatever we are going and doing right now is fine.. just give the oral result and comparision, don't change anything. 

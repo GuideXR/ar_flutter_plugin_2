@@ -728,19 +728,30 @@ class ArView(
                 
                 boundingBoxCubeEntity = entity
                 
-                // Create cube node with entity attached
+                // CRITICAL: Create cube node with entity attached to scene
+                // createCubeNode will add entity to scene and attach renderable
                 val cubeNode = createCubeNode(
                     engine = sceneView.engine,
+                    scene = sceneView.scene,
                     entity = entity
                 ).apply {
                     position = ScenePosition(px, py, pz)
-                    rotation = SceneRotation(rx, ry, rz, rw)
+                    // SceneRotation uses Euler angles (x, y, z), not quaternion
+                    // For identity rotation, use (0, 0, 0)
+                    rotation = SceneRotation(0f, 0f, 0f)
                 }
                 
                 boundingBoxCubeNode = cubeNode
                 sceneView.addChildNode(cubeNode)
                 
-                Log.d(TAG, "✅ Primitive cube created: ${width}x${height}x${depth} at ($px, $py, $pz)")
+                // Sync the Node transform to the Filament entity
+                // Must be done after adding node to scene so worldTransform is valid
+                val transformManager = sceneView.engine.transformManager
+                val instance = transformManager.getInstance(entity)
+                val transformArray = cubeNode.worldTransform.toFloatArray()
+                transformManager.setTransform(instance, transformArray)
+                
+                Log.d(TAG, "✅ Primitive cube created: ${width}x${height}x${depth} at ($px, $py, $pz), entity=$entity")
                 result.success(true)
             }
         } catch (e: Exception) {
@@ -765,17 +776,22 @@ class ArView(
                 val pz = pos?.get("z")?.toFloat()
                 
                 boundingBoxCubeNode?.let { node ->
-                    // Update position if provided
-                    px?.let { x ->
-                        py?.let { y ->
-                            pz?.let { z ->
-                                node.position = ScenePosition(x, y, z)
+                    boundingBoxCubeEntity?.let { entity ->
+                        // Update position if provided
+                        px?.let { x ->
+                            py?.let { y ->
+                                pz?.let { z ->
+                                    node.position = ScenePosition(x, y, z)
+                                }
                             }
                         }
+                        
+                        // Manually sync the Node transform to the Filament entity
+                        val transformManager = sceneView.engine.transformManager
+                        val transform = node.worldTransform
+                        val transformArray = transform.toFloatArray()
+                        transformManager.setTransform(transformManager.getInstance(entity), transformArray)
                     }
-                    
-                    // SceneView's Node automatically updates the renderable transform
-                    // when position/rotation/scale changes, so no manual transform update needed
                 }
                 
                 // If dimensions changed, we need to recreate the cube
@@ -800,6 +816,8 @@ class ArView(
                 }
                 
                 boundingBoxCubeEntity?.let { entity ->
+                    // Remove entity from scene before destroying
+                    sceneView.scene.removeEntity(entity)
                     destroyRenderable(sceneView.engine, entity)
                     boundingBoxCubeEntity = null
                 }
