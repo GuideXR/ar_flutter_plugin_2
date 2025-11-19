@@ -1,4 +1,11 @@
 # Changelog
+## 0.0.4 (Unreleased)
+* Added procedural translucent cube rendering for Android using SceneView's Cube geometry API
+* New method channel handlers: `addPrimitiveCube`, `updatePrimitiveCube`, `removePrimitiveCube`
+* Created `FilamentHelpers.kt` with `createSceneViewCubeNode()` helper function
+* Improved lifecycle management and crash-safe disposal handling
+* See [docs/procedural_cube.md](docs/procedural_cube.md) for detailed documentation
+
 ## 0.0.3
 * Solved the issue "Failed to RegisterNatives with FlutterJNI" mentioned here : https://github.com/hlefe/ar_flutter_plugin_2/issues/1#issuecomment-2676352087
 

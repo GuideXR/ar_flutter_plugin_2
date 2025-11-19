@@ -142,3 +142,9 @@ Therefore, it is necessary to publish your project with github and make the modi
 This is a rough sketch of the architecture the plugin implements:
 
 ![ar_plugin_architecture](https://github.com/hlefe/ar_flutter_plugin_2/raw/main/AR_Plugin_Architecture_highlevel.svg)
+
+## Additional Documentation
+
+- **[Architecture Documentation](docs/arch.md)** - Detailed technical architecture and implementation details
+- **[Cloud Anchor Setup](cloudAnchorSetup.md)** - Guide for setting up Google Cloud Anchors
+- **[Procedural Cube Implementation](docs/procedural_cube.md)** - Documentation for procedural translucent cube rendering (Android)
