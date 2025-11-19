@@ -744,24 +744,63 @@ class ArView(
                 val py = pos?.get("y")?.toFloat()
                 val pz = pos?.get("z")?.toFloat()
                 
-                // Update cube position if provided
-                boundingBoxCubeNode?.let { node ->
-                    px?.let { x ->
-                        py?.let { y ->
-                            pz?.let { z ->
-                                node.position = ScenePosition(x, y, z)
-                                Log.d(TAG, "✅ Cube position updated to ($x, $y, $z)")
+                // Check if we need to recreate the cube (dimensions changed)
+                val needsRecreation = width != null || height != null || depth != null
+                
+                if (needsRecreation) {
+                    // Get color and opacity from args, or use defaults
+                    val currentColor = (args["color"] as? Int) ?: 0x00FF00 // Green (default)
+                    val currentOpacity = (args["opacity"] as? Double)?.toFloat() ?: 0.3f // Default opacity
+                    
+                    // Get new dimensions (use provided or keep current)
+                    val newWidth = width ?: 1.0f
+                    val newHeight = height ?: 1.0f
+                    val newDepth = depth ?: 1.0f
+                    
+                    // Get new position (use provided or keep current)
+                    val newPx = px ?: 0f
+                    val newPy = py ?: 0f
+                    val newPz = pz ?: 0f
+                    
+                    // Remove old cube
+                    boundingBoxCubeNode?.let { oldNode ->
+                        try {
+                            if (sceneView.scene != null) {
+                                sceneView.removeChildNode(oldNode)
+                                oldNode.destroy()
                             }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Error removing old cube: ${e.message}")
                         }
+                        boundingBoxCubeNode = null
                     }
                     
-                    // If dimensions changed, we need to recreate the cube
-                    // SceneView Cube doesn't support dynamic resizing
-                    width?.let { w ->
-                        height?.let { h ->
-                            depth?.let { d ->
-                                // For now, just log - full recreation would be needed
-                                Log.d(TAG, "⚠️ Dimension change requested: ${w}x${h}x${d} (recreation needed)")
+                    // Create new cube with updated dimensions
+                    val cubeNode = createSceneViewCubeNode(
+                        engine = sceneView.engine,
+                        context = viewContext,
+                        width = newWidth,
+                        height = newHeight,
+                        depth = newDepth,
+                        color = currentColor,
+                        opacity = currentOpacity,
+                        position = ScenePosition(newPx, newPy, newPz)
+                    )
+                    
+                    cubeNode.rotation = SceneRotation(0f, 0f, 0f)
+                    boundingBoxCubeNode = cubeNode
+                    sceneView.addChildNode(cubeNode)
+                    
+                    Log.d(TAG, "✅ Cube recreated with new dimensions: ${newWidth}x${newHeight}x${newDepth} at ($newPx, $newPy, $newPz)")
+                } else {
+                    // Only update position if dimensions didn't change
+                    boundingBoxCubeNode?.let { node ->
+                        px?.let { x ->
+                            py?.let { y ->
+                                pz?.let { z ->
+                                    node.position = ScenePosition(x, y, z)
+                                    Log.d(TAG, "✅ Cube position updated to ($x, $y, $z)")
+                                }
                             }
                         }
                     }
@@ -779,19 +818,37 @@ class ArView(
         try {
             mainScope.launch {
                 boundingBoxCubeNode?.let { node ->
-                    sceneView.removeChildNode(node)
-                    node.destroy()
+                    try {
+                        // Check if sceneView is still valid before removing
+                        // Scene might be destroyed during app lifecycle
+                        if (sceneView.scene != null) {
+                            sceneView.removeChildNode(node)
+                            node.destroy()
+                        } else {
+                            // Scene already destroyed, just destroy the node
+                            node.destroy()
+                        }
+                    } catch (e: IllegalStateException) {
+                        // Scene already destroyed, just clean up the reference
+                        Log.w(TAG, "Scene already destroyed, cleaning up cube node reference")
+                        try {
+                            node.destroy()
+                        } catch (ex: Exception) {
+                            // Node might already be destroyed
+                            Log.w(TAG, "Node already destroyed: ${ex.message}")
+                        }
+                    }
                     boundingBoxCubeNode = null
                 }
-                
-                // SceneView Cube Node handles cleanup automatically
                 
                 Log.d(TAG, "✅ Primitive cube removed")
                 result.success(true)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error removing primitive cube", e)
-            result.error("REMOVE_CUBE_ERROR", e.message, null)
+            // Don't fail if scene is already destroyed
+            boundingBoxCubeNode = null
+            result.success(true)
         }
     }
 
@@ -1312,6 +1369,20 @@ class ArView(
 
     override fun dispose() {
         Log.i(TAG, "dispose")
+        
+        // Clean up bounding box cube before destroying scene
+        boundingBoxCubeNode?.let { node ->
+            try {
+                if (sceneView.scene != null) {
+                    sceneView.removeChildNode(node)
+                }
+                node.destroy()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning up cube node during dispose: ${e.message}")
+            }
+            boundingBoxCubeNode = null
+        }
+        
         sessionChannel.setMethodCallHandler(null)
         objectChannel.setMethodCallHandler(null)
         anchorChannel.setMethodCallHandler(null)
