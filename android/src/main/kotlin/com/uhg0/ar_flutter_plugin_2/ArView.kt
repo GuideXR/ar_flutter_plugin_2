@@ -59,6 +59,10 @@ import io.github.sceneview.texture.ImageTexture
 import io.github.sceneview.material.setTexture
 import io.github.sceneview.ar.scene.PlaneRenderer
 import io.flutter.FlutterInjector
+import com.uhg0.ar_flutter_plugin_2.createTransparentMaterial
+import com.uhg0.ar_flutter_plugin_2.createCubeRenderable
+import com.uhg0.ar_flutter_plugin_2.destroyRenderable
+import com.uhg0.ar_flutter_plugin_2.createCubeNode
 
 class ArView(
     context: Context,
@@ -95,6 +99,8 @@ class ArView(
 
     private var lookAtEnabled = false
     private var lookAtNodeName: String? = null
+    private var boundingBoxCubeNode: Node? = null
+    private var boundingBoxCubeEntity: Int? = null
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -155,6 +161,21 @@ class ArView(
                 }
                 "enableLookAt" -> handleEnableLookAt(call, result)
                 "disableLookAt" -> handleDisableLookAt(result)
+                "addPrimitiveCube" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleAddPrimitiveCube(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Cube data is required", null)
+                }
+                "updatePrimitiveCube" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleUpdatePrimitiveCube(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Cube data is required", null)
+                }
+                "removePrimitiveCube" -> {
+                    handleRemovePrimitiveCube(result)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -651,6 +672,144 @@ class ArView(
         } catch (e: Exception) {
             Log.e(TAG, "Error removing node", e)
             result.error("REMOVE_NODE_ERROR", e.message, null)
+        }
+    }
+
+    private fun handleAddPrimitiveCube(
+        args: Map<String, Any>,
+        result: MethodChannel.Result
+    ) {
+        try {
+            mainScope.launch {
+                val width = (args["width"] as? Double)?.toFloat() ?: 1.0f
+                val height = (args["height"] as? Double)?.toFloat() ?: 1.0f
+                val depth = (args["depth"] as? Double)?.toFloat() ?: 1.0f
+                val color = (args["color"] as? Int) ?: 0x00FF00 // Green
+                val opacity = (args["opacity"] as? Double)?.toFloat() ?: 0.3f
+                
+                val pos = args["position"] as? Map<String, Double>
+                val px = pos?.get("x")?.toFloat() ?: 0f
+                val py = pos?.get("y")?.toFloat() ?: 0f
+                val pz = pos?.get("z")?.toFloat() ?: 0f
+                
+                val rot = args["rotation"] as? Map<String, Double>
+                val rx = rot?.get("x")?.toFloat() ?: 0f
+                val ry = rot?.get("y")?.toFloat() ?: 0f
+                val rz = rot?.get("z")?.toFloat() ?: 0f
+                val rw = rot?.get("w")?.toFloat() ?: 1f
+                
+                // Remove existing cube if any
+                boundingBoxCubeNode?.let {
+                    sceneView.removeChildNode(it)
+                    it.destroy()
+                    boundingBoxCubeNode = null
+                    boundingBoxCubeEntity?.let { entity ->
+                        destroyRenderable(sceneView.engine, entity)
+                        boundingBoxCubeEntity = null
+                    }
+                }
+                
+                // Create transparent material
+                val materialInstance = createTransparentMaterial(
+                    engine = sceneView.engine,
+                    context = viewContext,
+                    color = color,
+                    opacity = opacity
+                )
+                
+                // Create cube renderable
+                val entity = createCubeRenderable(
+                    engine = sceneView.engine,
+                    width = width,
+                    height = height,
+                    depth = depth,
+                    materialInstance = materialInstance
+                )
+                
+                boundingBoxCubeEntity = entity
+                
+                // Create cube node with entity attached
+                val cubeNode = createCubeNode(
+                    engine = sceneView.engine,
+                    entity = entity
+                ).apply {
+                    position = ScenePosition(px, py, pz)
+                    rotation = SceneRotation(rx, ry, rz, rw)
+                }
+                
+                boundingBoxCubeNode = cubeNode
+                sceneView.addChildNode(cubeNode)
+                
+                Log.d(TAG, "✅ Primitive cube created: ${width}x${height}x${depth} at ($px, $py, $pz)")
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding primitive cube", e)
+            result.error("ADD_CUBE_ERROR", e.message, null)
+        }
+    }
+    
+    private fun handleUpdatePrimitiveCube(
+        args: Map<String, Any>,
+        result: MethodChannel.Result
+    ) {
+        try {
+            mainScope.launch {
+                val width = (args["width"] as? Double)?.toFloat()
+                val height = (args["height"] as? Double)?.toFloat()
+                val depth = (args["depth"] as? Double)?.toFloat()
+                
+                val pos = args["position"] as? Map<String, Double>
+                val px = pos?.get("x")?.toFloat()
+                val py = pos?.get("y")?.toFloat()
+                val pz = pos?.get("z")?.toFloat()
+                
+                boundingBoxCubeNode?.let { node ->
+                    // Update position if provided
+                    px?.let { x ->
+                        py?.let { y ->
+                            pz?.let { z ->
+                                node.position = ScenePosition(x, y, z)
+                            }
+                        }
+                    }
+                    
+                    // SceneView's Node automatically updates the renderable transform
+                    // when position/rotation/scale changes, so no manual transform update needed
+                }
+                
+                // If dimensions changed, we need to recreate the cube
+                // For now, we'll just update the transform
+                // TODO: Recreate cube if dimensions change significantly
+                
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating primitive cube", e)
+            result.error("UPDATE_CUBE_ERROR", e.message, null)
+        }
+    }
+    
+    private fun handleRemovePrimitiveCube(result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                boundingBoxCubeNode?.let { node ->
+                    sceneView.removeChildNode(node)
+                    node.destroy()
+                    boundingBoxCubeNode = null
+                }
+                
+                boundingBoxCubeEntity?.let { entity ->
+                    destroyRenderable(sceneView.engine, entity)
+                    boundingBoxCubeEntity = null
+                }
+                
+                Log.d(TAG, "✅ Primitive cube removed")
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error removing primitive cube", e)
+            result.error("REMOVE_CUBE_ERROR", e.message, null)
         }
     }
 
