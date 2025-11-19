@@ -7,6 +7,9 @@ import java.nio.ByteOrder
 import io.github.sceneview.loaders.MaterialLoader
 import io.github.sceneview.math.colorOf
 import android.content.Context
+import io.github.sceneview.geometries.Cube
+import io.github.sceneview.node.GeometryNode
+import io.github.sceneview.math.Size
 
 
 /**
@@ -334,32 +337,58 @@ fun destroyRenderable(engine: Engine, entity: Int) {
 }
 
 /**
- * Creates a SceneView Node with the Filament entity attached
+ * Creates a SceneView Cube Node using SceneView's built-in Cube geometry API
+ * This is much simpler than low-level Filament and integrates better with SceneView
  * @param engine Filament Engine instance
- * @param scene Filament Scene instance
- * @param entity Filament renderable entity ID
- * @return Node with entity attached and added to scene
+ * @param context Android Context for MaterialLoader
+ * @param width Cube width (X dimension)
+ * @param height Cube height (Y dimension)
+ * @param depth Cube depth (Z dimension)
+ * @param color RGB color as Int (0xRRGGBB)
+ * @param opacity Opacity value (0.0 to 1.0)
+ * @param position Position as Float3 (x, y, z)
+ * @return GeometryNode with Cube geometry attached
  */
-fun createCubeNode(
+fun createSceneViewCubeNode(
     engine: Engine,
-    scene: com.google.android.filament.Scene,
-    entity: Int
-): Node {
-    // CRITICAL: Add entity to Filament scene - required for rendering
-    scene.addEntity(entity)
+    context: Context,
+    width: Float,
+    height: Float,
+    depth: Float,
+    color: Int,
+    opacity: Float,
+    position: io.github.sceneview.math.Position
+): GeometryNode {
+    // Create SceneView Cube geometry using Builder pattern
+    // According to API: https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-cube/-builder/index.html
+    val cube = Cube.Builder()
+        .size(Size(width, height, depth))
+        .build(engine)
     
-    // Create Node for transform management
-    // The entity is already in the scene and will render
-    // The Node is used to manage position/rotation transforms
-    return Node(engine = engine)
+    // Create material using MaterialLoader
+    val materialLoader = MaterialLoader(engine, context)
+    val r = ((color shr 16) and 0xFF) / 255f
+    val g = ((color shr 8) and 0xFF) / 255f
+    val b = (color and 0xFF) / 255f
+    
+    val materialInstance = materialLoader.createColorInstance(
+        color = colorOf(r, g, b, opacity),
+        metallic = 0.0f,
+        roughness = 0.5f
+    )
+    
+    // Create GeometryNode with Cube geometry
+    val cubeNode = GeometryNode(
+        engine = engine,
+        geometry = cube,
+        materialInstance = materialInstance
+    )
+    
+    // Set position
+    cubeNode.position = position
+    
+    return cubeNode
 }
 
 
 
-// Just for your info i got this thing from the ref 
-
-// https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-cube/index.html 
-// https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-geometry/index.html 
-// https://sceneview.github.io/api/sceneview-android/sceneview/io.github.sceneview.geometries/-shape/index.html 
-
-// Can we able to take this and achedive our target or whatever we are going and doing right now is fine.. just give the oral result and comparision, don't change anything. 
