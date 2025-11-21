@@ -714,8 +714,14 @@ class ArView(
                     position = ScenePosition(px, py, pz)
                 )
                 
-                // Set rotation (identity for now)
-                cubeNode.rotation = SceneRotation(0f, 0f, 0f)
+                
+                // Convert quaternion to Euler angles (yaw only for Y-axis rotation)
+                // For a Y-axis rotation quaternion: yaw = 2 * atan2(y, w)
+                val yawRadians = 2.0f * kotlin.math.atan2(ry, rw)
+                val yawDegrees = Math.toDegrees(yawRadians.toDouble()).toFloat()
+                
+                // Set rotation (Y-axis rotation only for horizontal alignment)
+                cubeNode.rotation = SceneRotation(0f, yawDegrees, 0f)
                 
                 boundingBoxCubeNode = cubeNode
                 sceneView.addChildNode(cubeNode)
@@ -787,7 +793,18 @@ class ArView(
                         position = ScenePosition(newPx, newPy, newPz)
                     )
                     
-                    cubeNode.rotation = SceneRotation(0f, 0f, 0f)
+                    // Get rotation from args
+                    val rot = args["rotation"] as? Map<String, Double>
+                    val rx = rot?.get("x")?.toFloat() ?: 0f
+                    val ry = rot?.get("y")?.toFloat() ?: 0f
+                    val rz = rot?.get("z")?.toFloat() ?: 0f
+                    val rw = rot?.get("w")?.toFloat() ?: 1f
+                    
+                    // Convert quaternion to Euler angles (yaw only for Y-axis rotation)
+                    val yawRadians = 2.0f * kotlin.math.atan2(ry, rw)
+                    val yawDegrees = Math.toDegrees(yawRadians.toDouble()).toFloat()
+                    
+                    cubeNode.rotation = SceneRotation(0f, yawDegrees, 0f)
                     boundingBoxCubeNode = cubeNode
                     sceneView.addChildNode(cubeNode)
                     
