@@ -239,4 +239,60 @@ class ARSessionManager {
     final result = await _channel.invokeMethod<Uint8List>('captureRawImage');
     return MemoryImage(result!);
   }
+
+  // ========== 2-Point Bounding Box Methods ==========
+
+  /// Performs a raycast from the center of the screen to detect planes
+  Future<Map<String, dynamic>?> getCenterRaycast() async {
+    try {
+      final result = await _channel.invokeMethod('getCenterRaycast');
+      return result as Map<String, dynamic>?;
+    } catch (e) {
+      print('Error getting center raycast: $e');
+      return null;
+    }
+  }
+
+  /// Gets the current camera position and rotation
+  Future<Map<String, dynamic>?> getCameraPosition() async {
+    try {
+      final result = await _channel.invokeMethod('getCameraPosition');
+      return result as Map<String, dynamic>?;
+    } catch (e) {
+      print('Error getting camera position: $e');
+      return null;
+    }
+  }
+
+  /// Draws a line between two points
+  Future<bool> drawLine({
+    required Vector3 start,
+    required Vector3 end,
+    int color = 0xFFFFFF,
+    bool dotted = false,
+  }) async {
+    try {
+      await _channel.invokeMethod('drawLine', {
+        'start': {'x': start.x, 'y': start.y, 'z': start.z},
+        'end': {'x': end.x, 'y': end.y, 'z': end.z},
+        'color': color,
+        'dotted': dotted,
+      });
+      return true;
+    } catch (e) {
+      print('Error drawing line: $e');
+      return false;
+    }
+  }
+
+  /// Clears all drawn lines
+  Future<bool> clearLines() async {
+    try {
+      await _channel.invokeMethod('clearLines');
+      return true;
+    } catch (e) {
+      print('Error clearing lines: $e');
+      return false;
+    }
+  }
 }

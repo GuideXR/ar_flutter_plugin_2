@@ -97,6 +97,8 @@ class ArView(
     private var lookAtEnabled = false
     private var lookAtNodeName: String? = null
     private var boundingBoxCubeNode: Node? = null
+    private val lineNodes = mutableListOf<Node>()
+
 
     private class PointCloudNode(
         modelInstance: ModelInstance,
@@ -117,6 +119,15 @@ class ArView(
                 "enableCamera" -> handleEnableCamera(result)
                 "getCameraIntrinsics" -> handleGetCameraIntrinsics(result)
                 "captureRawImage" -> handleCaptureRawImage(result)
+                "getCenterRaycast" -> handleGetCenterRaycast(result)
+                "getCameraPosition" -> handleGetCameraPosition(result)
+                "drawLine" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleDrawLine(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Line data is required", null)
+                }
+                "clearLines" -> handleClearLines(result)
                 else -> result.notImplemented()
             }
         }
@@ -1743,6 +1754,180 @@ class ArView(
             )
         } else {
             v
+        }
+    }
+
+    // ========== 2-Point Bounding Box Methods ==========
+
+    /**
+     * Performs a raycast from the center of the screen to detect planes
+     */
+    private fun handleGetCenterRaycast(result: MethodChannel.Result) {
+        try {
+            session?.update()?.let { frame ->
+                // Get screen center coordinates
+                val screenWidth = sceneView.width.toFloat()
+                val screenHeight = sceneView.height.toFloat()
+                val centerX = screenWidth / 2f
+                val centerY = screenHeight / 2f
+
+                // Create MotionEvent for center of screen
+                val motionEvent = MotionEvent.obtain(
+                    System.currentTimeMillis(),
+                    System.currentTimeMillis(),
+                    MotionEvent.ACTION_DOWN,
+                    centerX,
+                    centerY,
+                    0
+                )
+
+                // Perform hit test
+                val hitResults = frame.hitTest(motionEvent)
+                motionEvent.recycle()
+
+                // Filter for plane hits
+                val planeHit = hitResults.firstOrNull { hit ->
+                    val trackable = hit.trackable
+                    trackable is Plane && trackable.trackingState == TrackingState.TRACKING
+                }
+
+                if (planeHit != null) {
+                    result.success(mapOf(
+                        "hit" to true,
+                        "position" to mapOf(
+                            "x" to planeHit.hitPose.tx().toDouble(),
+                            "y" to planeHit.hitPose.ty().toDouble(),
+                            "z" to planeHit.hitPose.tz().toDouble(),
+                        ),
+                        "distance" to planeHit.distance.toDouble()
+                    ))
+                } else {
+                    result.success(mapOf("hit" to false))
+                }
+            } ?: result.success(mapOf("hit" to false))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in center raycast", e)
+            result.error("RAYCAST_ERROR", e.message, null)
+        }
+    }
+
+    /**
+     * Gets the current camera position and rotation
+     */
+    private fun handleGetCameraPosition(result: MethodChannel.Result) {
+        try {
+            session?.update()?.let { frame ->
+                val cameraPose = frame.camera.pose
+                result.success(mapOf(
+                    "position" to mapOf(
+                        "x" to cameraPose.tx().toDouble(),
+                        "y" to cameraPose.ty().toDouble(),
+                        "z" to cameraPose.tz().toDouble(),
+                    ),
+                    "rotation" to mapOf(
+                        "x" to cameraPose.qx().toDouble(),
+                        "y" to cameraPose.qy().toDouble(),
+                        "z" to cameraPose.qz().toDouble(),
+                        "w" to cameraPose.qw().toDouble(),
+                    )
+                ))
+            } ?: result.error("NO_FRAME", "No frame available", null)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting camera position", e)
+            result.error("CAMERA_ERROR", e.message, null)
+        }
+    }
+
+    /**
+     * Draws a line between two points using a CylinderNode
+     */
+    private fun handleDrawLine(args: Map<String, Any>, result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                val start = args["start"] as? Map<String, Double>
+                val end = args["end"] as? Map<String, Double>
+                val colorInt = (args["color"] as? Int) ?: 0xFFFFFF
+                val isDotted = (args["dotted"] as? Boolean) ?: false
+
+                val startPos = ScenePosition(
+                    start?.get("x")?.toFloat() ?: 0f,
+                    start?.get("y")?.toFloat() ?: 0f,
+                    start?.get("z")?.toFloat() ?: 0f
+                )
+                val endPos = ScenePosition(
+                    end?.get("x")?.toFloat() ?: 0f,
+                    end?.get("y")?.toFloat() ?: 0f,
+                    end?.get("z")?.toFloat() ?: 0f
+                )
+
+                // Calculate line properties
+                val direction = endPos - startPos
+                val length = kotlin.math.sqrt(
+                    direction.x * direction.x +
+                    direction.y * direction.y +
+                    direction.z * direction.z
+                )
+                val midpoint = ScenePosition(
+                    (startPos.x + endPos.x) / 2f,
+                    (startPos.y + endPos.y) / 2f,
+                    (startPos.z + endPos.z) / 2f
+                )
+
+                // Create cylinder node as line
+                val lineNode = CylinderNode(
+                    engine = sceneView.engine,
+                    radius = 0.003f, // 3mm thick line
+                    height = length,
+                    center = ScenePosition(0f, 0f, 0f)
+                )
+
+                // Position the line at midpoint
+                lineNode.position = midpoint
+
+                // Orient the line to point from start to end
+                val normalizedDir = ScenePosition(
+                    direction.x / length,
+                    direction.y / length,
+                    direction.z / length
+                )
+                lineNode.lookTowards(endPos)
+
+                // Set color
+                val r = ((colorInt shr 16) and 0xFF) / 255f
+                val g = ((colorInt shr 8) and 0xFF) / 255f
+                val b = (colorInt and 0xFF) / 255f
+                lineNode.materialInstance?.setParameter(
+                    "baseColorFactor",
+                    colorOf(r = r, g = g, b = b, a = 1f)
+                )
+
+                lineNodes.add(lineNode)
+                sceneView.addChildNode(lineNode)
+
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error drawing line", e)
+            result.error("LINE_ERROR", e.message, null)
+        }
+    }
+
+    /**
+     * Clears all drawn lines
+     */
+    private fun handleClearLines(result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                lineNodes.forEach { node ->
+                    sceneView.removeChildNode(node)
+                    node.destroy()
+                }
+                lineNodes.clear()
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing lines", e)
+            result.error("CLEAR_ERROR", e.message, null)
         }
     }
 }
