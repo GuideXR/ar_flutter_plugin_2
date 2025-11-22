@@ -1764,7 +1764,7 @@ class ArView(
      */
     private fun handleGetCenterRaycast(result: MethodChannel.Result) {
         try {
-            session?.update()?.let { frame ->
+            sceneView.session?.update()?.let { frame ->
                 // Get screen center coordinates
                 val screenWidth = sceneView.width.toFloat()
                 val screenHeight = sceneView.height.toFloat()
@@ -1792,15 +1792,16 @@ class ArView(
                 }
 
                 if (planeHit != null) {
-                    result.success(mapOf(
+                    val raycastData = mapOf(
                         "hit" to true,
                         "position" to mapOf(
                             "x" to planeHit.hitPose.tx().toDouble(),
                             "y" to planeHit.hitPose.ty().toDouble(),
-                            "z" to planeHit.hitPose.tz().toDouble(),
+                            "z" to planeHit.hitPose.tz().toDouble()
                         ),
                         "distance" to planeHit.distance.toDouble()
-                    ))
+                    )
+                    result.success(raycastData)
                 } else {
                     result.success(mapOf("hit" to false))
                 }
@@ -1816,21 +1817,22 @@ class ArView(
      */
     private fun handleGetCameraPosition(result: MethodChannel.Result) {
         try {
-            session?.update()?.let { frame ->
+            sceneView.session?.update()?.let { frame ->
                 val cameraPose = frame.camera.pose
-                result.success(mapOf(
+                val cameraData = mapOf(
                     "position" to mapOf(
                         "x" to cameraPose.tx().toDouble(),
                         "y" to cameraPose.ty().toDouble(),
-                        "z" to cameraPose.tz().toDouble(),
+                        "z" to cameraPose.tz().toDouble()
                     ),
                     "rotation" to mapOf(
                         "x" to cameraPose.qx().toDouble(),
                         "y" to cameraPose.qy().toDouble(),
                         "z" to cameraPose.qz().toDouble(),
-                        "w" to cameraPose.qw().toDouble(),
+                        "w" to cameraPose.qw().toDouble()
                     )
-                ))
+                )
+                result.success(cameraData)
             } ?: result.error("NO_FRAME", "No frame available", null)
         } catch (e: Exception) {
             Log.e(TAG, "Error getting camera position", e)
@@ -1873,12 +1875,26 @@ class ArView(
                     (startPos.z + endPos.z) / 2f
                 )
 
-                // Create cylinder node as line
+                // Extract color components
+                val r = ((colorInt shr 16) and 0xFF) / 255f
+                val g = ((colorInt shr 8) and 0xFF) / 255f
+                val b = (colorInt and 0xFF) / 255f
+
+                // Create material with color using MaterialLoader
+                val materialLoader = MaterialLoader(sceneView.engine, viewContext)
+                val materialInstance = materialLoader.createColorInstance(
+                    color = colorOf(r, g, b, 1f),
+                    metallic = 0.0f,
+                    roughness = 0.4f
+                )
+
+                // Create cylinder node as line with material
                 val lineNode = CylinderNode(
                     engine = sceneView.engine,
                     radius = 0.003f, // 3mm thick line
                     height = length,
-                    center = ScenePosition(0f, 0f, 0f)
+                    center = ScenePosition(0f, 0f, 0f),
+                    materialInstance = materialInstance
                 )
 
                 // Position the line at midpoint
@@ -1891,15 +1907,6 @@ class ArView(
                     direction.z / length
                 )
                 lineNode.lookTowards(endPos)
-
-                // Set color
-                val r = ((colorInt shr 16) and 0xFF) / 255f
-                val g = ((colorInt shr 8) and 0xFF) / 255f
-                val b = (colorInt and 0xFF) / 255f
-                lineNode.materialInstance?.setParameter(
-                    "baseColorFactor",
-                    colorOf(r = r, g = g, b = b, a = 1f)
-                )
 
                 lineNodes.add(lineNode)
                 sceneView.addChildNode(lineNode)

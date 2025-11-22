@@ -1,5 +1,4 @@
 import 'dart:math' show sqrt;
-import 'dart:typed_data';
 
 import 'package:ar_flutter_plugin_2/datatypes/config_planedetection.dart';
 import 'package:ar_flutter_plugin_2/models/ar_anchor.dart';
@@ -246,7 +245,18 @@ class ARSessionManager {
   Future<Map<String, dynamic>?> getCenterRaycast() async {
     try {
       final result = await _channel.invokeMethod('getCenterRaycast');
-      return result as Map<String, dynamic>?;
+      if (result == null) return null;
+      // Properly convert the result to Map<String, dynamic>
+      if (result is Map) {
+        final converted = Map<String, dynamic>.from(result);
+        // Also convert nested position map if it exists
+        if (converted['position'] is Map) {
+          converted['position'] =
+              Map<String, dynamic>.from(converted['position'] as Map);
+        }
+        return converted;
+      }
+      return null;
     } catch (e) {
       print('Error getting center raycast: $e');
       return null;
@@ -257,7 +267,22 @@ class ARSessionManager {
   Future<Map<String, dynamic>?> getCameraPosition() async {
     try {
       final result = await _channel.invokeMethod('getCameraPosition');
-      return result as Map<String, dynamic>?;
+      if (result == null) return null;
+      // Properly convert the result to Map<String, dynamic>
+      if (result is Map) {
+        final converted = Map<String, dynamic>.from(result);
+        // Also convert nested position and rotation maps if they exist
+        if (converted['position'] is Map) {
+          converted['position'] =
+              Map<String, dynamic>.from(converted['position'] as Map);
+        }
+        if (converted['rotation'] is Map) {
+          converted['rotation'] =
+              Map<String, dynamic>.from(converted['rotation'] as Map);
+        }
+        return converted;
+      }
+      return null;
     } catch (e) {
       print('Error getting camera position: $e');
       return null;
