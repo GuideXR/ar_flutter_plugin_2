@@ -98,6 +98,8 @@ class ArView(
     private var lookAtNodeName: String? = null
     private var boundingBoxCubeNode: Node? = null
     private val lineNodes = mutableListOf<Node>()
+    private var boundingBoxNode: WireframeNode? = null
+    private var lengthLineNode: SimpleLineNode? = null
 
 
     private class PointCloudNode(
@@ -128,6 +130,24 @@ class ArView(
                     } ?: result.error("INVALID_ARGUMENTS", "Line data is required", null)
                 }
                 "clearLines" -> handleClearLines(result)
+                "updateBoundingBox" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleUpdateBoundingBox(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Bounding box data is required", null)
+                }
+                "updateLengthLine" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleUpdateLengthLine(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Line data is required", null)
+                }
+                "addGroundPoint" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleAddGroundPoint(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Point data is required", null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -1919,6 +1939,99 @@ class ArView(
         }
     }
 
+    private fun handleUpdateBoundingBox(args: Map<String, Any>, result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                val corners = args["corners"] as? List<Map<String, Double>>
+                val colorInt = (args["color"] as? Int) ?: 0xFFFFFF
+                
+                if (corners == null || corners.size != 8) {
+                    result.error("INVALID_ARGS", "8 corners required", null)
+                    return@launch
+                }
+
+                val cornerPositions = corners.map { 
+                    ScenePosition(
+                        it["x"]?.toFloat() ?: 0f,
+                        it["y"]?.toFloat() ?: 0f,
+                        it["z"]?.toFloat() ?: 0f
+                    )
+                }
+
+                if (boundingBoxNode == null) {
+                    boundingBoxNode = WireframeNode(sceneView.context, sceneView.engine, colorInt)
+                    sceneView.addChildNode(boundingBoxNode!!)
+                }
+
+                boundingBoxNode?.update(cornerPositions)
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating bounding box", e)
+            result.error("BB_ERROR", e.message, null)
+        }
+    }
+
+    private fun handleUpdateLengthLine(args: Map<String, Any>, result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                val start = args["start"] as? Map<String, Double>
+                val end = args["end"] as? Map<String, Double>
+                val colorInt = (args["color"] as? Int) ?: 0xFFFFFF
+
+                val startPos = ScenePosition(
+                    start?.get("x")?.toFloat() ?: 0f,
+                    start?.get("y")?.toFloat() ?: 0f,
+                    start?.get("z")?.toFloat() ?: 0f
+                )
+                val endPos = ScenePosition(
+                    end?.get("x")?.toFloat() ?: 0f,
+                    end?.get("y")?.toFloat() ?: 0f,
+                    end?.get("z")?.toFloat() ?: 0f
+                )
+
+                if (lengthLineNode == null) {
+                    lengthLineNode = SimpleLineNode(
+                        sceneView.context,
+                        sceneView.engine,
+                        colorInt
+                    )
+                    sceneView.addChildNode(lengthLineNode!!)
+                } else {
+                    lengthLineNode?.update(startPos, endPos)
+                }
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating length line", e)
+            result.error("LINE_ERROR", e.message, null)
+        }
+    }
+
+    private fun handleAddGroundPoint(args: Map<String, Any>, result: MethodChannel.Result) {
+        try {
+            mainScope.launch {
+                val position = args["position"] as? Map<String, Double>
+                val colorInt = (args["color"] as? Int) ?: 0xFFFFFF
+
+                val pos = ScenePosition(
+                    position?.get("x")?.toFloat() ?: 0f,
+                    position?.get("y")?.toFloat() ?: 0f,
+                    position?.get("z")?.toFloat() ?: 0f
+                )
+
+                val pointNode = GroundPointNode(sceneView.context, sceneView.engine, colorInt)
+                pointNode.position = pos
+                sceneView.addChildNode(pointNode)
+                
+                result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error adding ground point", e)
+            result.error("POINT_ERROR", e.message, null)
+        }
+    }
+
     /**
      * Clears all drawn lines
      */
@@ -1930,6 +2043,19 @@ class ArView(
                     node.destroy()
                 }
                 lineNodes.clear()
+                
+                boundingBoxNode?.let {
+                    sceneView.removeChildNode(it)
+                    it.destroy()
+                }
+                boundingBoxNode = null
+                
+                lengthLineNode?.let {
+                    sceneView.removeChildNode(it)
+                    it.destroy()
+                }
+                lengthLineNode = null
+                
                 result.success(true)
             }
         } catch (e: Exception) {

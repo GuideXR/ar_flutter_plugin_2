@@ -6,7 +6,7 @@ import 'package:ar_flutter_plugin_2/models/ar_hittest_result.dart';
 import 'package:ar_flutter_plugin_2/utils/json_converters.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:vector_math/vector_math_64.dart';
+import 'package:vector_math/vector_math_64.dart' hide Colors;
 
 // Type definitions to enforce a consistent use of the API
 typedef ARHitResultHandler = void Function(List<ARHitTestResult> hits);
@@ -31,7 +31,7 @@ class ARSessionManager {
   late ARHitResultHandler onPlaneOrPointTap;
 
   /// Receives total number of Planes when a plane is detected and added to the view
-  late ARPlaneResultHandler onPlaneDetected;
+  ARPlaneResultHandler? onPlaneDetected;
 
   /// Callback that is triggered once error is triggered
   ErrorHandler? onError;
@@ -162,7 +162,7 @@ class ARSessionManager {
         case 'onPlaneDetected':
           if (onPlaneDetected != null) {
             final planeCountResult = call.arguments as int;
-            onPlaneDetected(planeCountResult);
+            onPlaneDetected?.call(planeCountResult);
           }
           break;
         case 'dispose':
@@ -171,7 +171,7 @@ class ARSessionManager {
         case 'getCameraIntrinsics':
           if (onPlaneDetected != null) {
             final result = call.arguments as Map;
-            onPlaneDetected(result['width'] as int);
+            onPlaneDetected?.call(result['width'] as int);
           }
           break;
         default:
@@ -318,6 +318,57 @@ class ARSessionManager {
     } catch (e) {
       print('Error clearing lines: $e');
       return false;
+    }
+  }
+
+  /// Updates the bounding box wireframe with 8 corners
+  Future<void> updateBoundingBox(List<Vector3> corners,
+      {Color color = Colors.white}) async {
+    try {
+      final cornersList = corners
+          .map((c) => {
+                'x': c.x,
+                'y': c.y,
+                'z': c.z,
+              })
+          .toList();
+
+      await _channel.invokeMethod('updateBoundingBox', {
+        'corners': cornersList,
+        'color': color.value,
+      });
+    } catch (e) {
+      print("Error updating bounding box: $e");
+    }
+  }
+
+  /// Updates the length line (persistent node)
+  Future<void> updateLengthLine({
+    required Vector3 start,
+    required Vector3 end,
+    Color color = Colors.white,
+  }) async {
+    try {
+      await _channel.invokeMethod('updateLengthLine', {
+        'start': {'x': start.x, 'y': start.y, 'z': start.z},
+        'end': {'x': end.x, 'y': end.y, 'z': end.z},
+        'color': color.value,
+      });
+    } catch (e) {
+      print("Error updating length line: $e");
+    }
+  }
+
+  /// Adds a ground point marker (native node)
+  Future<void> addGroundPoint(Vector3 position,
+      {Color color = Colors.white}) async {
+    try {
+      await _channel.invokeMethod('addGroundPoint', {
+        'position': {'x': position.x, 'y': position.y, 'z': position.z},
+        'color': color.value,
+      });
+    } catch (e) {
+      print("Error adding ground point: $e");
     }
   }
 }
