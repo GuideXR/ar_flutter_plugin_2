@@ -60,6 +60,8 @@ class WireframeNode(
 
     private fun createMaterial() {
         val materialLoader = MaterialLoader(engine, context)
+        // Flutter Color.value is in ARGB format (0xAARRGGBB)
+        // Extract RGB components correctly (ignore alpha channel)
         val r = ((color shr 16) and 0xFF) / 255f
         val g = ((color shr 8) and 0xFF) / 255f
         val b = (color and 0xFF) / 255f
@@ -67,27 +69,29 @@ class WireframeNode(
         materialInstance = materialLoader.createColorInstance(
             color = colorOf(r, g, b, 1.0f),
             metallic = 0.0f,
-            roughness = 0.4f
+            roughness = 0.1f // Lower roughness for brighter, more visible white lines
         )
     }
 
     fun update(corners: List<Position>, newColor: Int? = null) {
         if (corners.size != 8) return
 
-        // Update color if provided
-        if (newColor != null && newColor != color) {
-            color = newColor
-            // Recreate material with new color
-            materialInstance?.let { engine.destroyMaterialInstance(it) }
-            createMaterial()
-            // Rebuild renderable with new material
-            if (renderableEntity != 0) {
-                RenderableManager.Builder(1)
-                    .boundingBox(Box(0f, 0f, 0f, 100f, 100f, 100f))
-                    .geometry(0, RenderableManager.PrimitiveType.LINES, vertexBuffer!!, indexBuffer!!)
-                    .material(0, materialInstance!!)
-                    .culling(false)
-                    .build(engine, this.entity)
+        // Update color if provided (always update to ensure color is applied)
+        if (newColor != null) {
+            if (newColor != color) {
+                color = newColor
+                // Recreate material with new color
+                materialInstance?.let { engine.destroyMaterialInstance(it) }
+                createMaterial()
+                // Rebuild renderable with new material
+                if (renderableEntity != 0) {
+                    RenderableManager.Builder(1)
+                        .boundingBox(Box(0f, 0f, 0f, 100f, 100f, 100f))
+                        .geometry(0, RenderableManager.PrimitiveType.LINES, vertexBuffer!!, indexBuffer!!)
+                        .material(0, materialInstance!!)
+                        .culling(false)
+                        .build(engine, this.entity)
+                }
             }
         }
 
