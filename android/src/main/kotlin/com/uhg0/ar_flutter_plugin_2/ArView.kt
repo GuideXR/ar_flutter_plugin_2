@@ -1963,7 +1963,8 @@ class ArView(
                     sceneView.addChildNode(boundingBoxNode!!)
                 }
 
-                boundingBoxNode?.update(cornerPositions)
+                // Update with new color to ensure white lines
+                boundingBoxNode?.update(cornerPositions, colorInt)
                 result.success(true)
             }
         } catch (e: Exception) {

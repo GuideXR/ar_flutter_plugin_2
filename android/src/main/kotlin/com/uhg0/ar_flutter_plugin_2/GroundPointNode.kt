@@ -2,50 +2,47 @@ package com.uhg0.ar_flutter_plugin_2
 
 import android.content.Context
 import com.google.android.filament.*
-import io.github.sceneview.math.Position
-import io.github.sceneview.node.Node
 import io.github.sceneview.loaders.MaterialLoader
 import io.github.sceneview.math.colorOf
+import io.github.sceneview.node.Node
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * A node that renders a wireframe box using Filament's PrimitiveType.LINES.
- * This is much more efficient than creating cylinder nodes for lines.
+ * A node that renders a small white dot using LINES primitive (lightweight)
+ * Creates a small cross pattern to represent a point marker
  */
-class WireframeNode(
+class GroundPointNode(
     val context: Context,
     engine: Engine,
-    var color: Int = 0xFFFFFF // Make mutable so we can update color
+    private val color: Int = 0xFFFFFF
 ) : Node(engine) {
     private var vertexBuffer: VertexBuffer? = null
     private var indexBuffer: IndexBuffer? = null
     private var materialInstance: MaterialInstance? = null
     private var renderableEntity: Int = 0
+    private val pointSize = 0.05f // 5cm size for the point marker (larger for better visibility)
 
     init {
         setupBuffers()
         createMaterial()
+        updatePosition() // Initialize the cross pattern
     }
 
     private fun setupBuffers() {
-        // 8 corners, 3 floats per corner (x, y, z)
+        // Create a simple cross pattern (2 lines forming a + shape) - horizontal and vertical only
+        // 2 lines = 4 vertices
         vertexBuffer = VertexBuffer.Builder()
-            .vertexCount(8)
+            .vertexCount(4)
             .bufferCount(1)
             .attribute(VertexBuffer.VertexAttribute.POSITION, 0, VertexBuffer.AttributeType.FLOAT3, 0, 12)
             .build(engine)
 
-        // Indices for a box wireframe
-        // Base: 0-1, 1-2, 2-3, 3-0
-        // Top: 4-5, 5-6, 6-7, 7-4
-        // Vertical: 0-4, 1-5, 2-6, 3-7
+        // Indices for 2 lines (horizontal and vertical cross) - LINES primitive only, no cylinders
         val indices = shortArrayOf(
-            0, 1, 1, 2, 2, 3, 3, 0,
-            4, 5, 5, 6, 6, 7, 7, 4,
-            0, 4, 1, 5, 2, 6, 3, 7
+            0, 1, // Horizontal line left to right (X axis)
+            2, 3  // Vertical line front to back (Z axis)
         )
-
         indexBuffer = IndexBuffer.Builder()
             .indexCount(indices.size)
             .bufferType(IndexBuffer.Builder.IndexType.USHORT)
@@ -67,47 +64,36 @@ class WireframeNode(
         materialInstance = materialLoader.createColorInstance(
             color = colorOf(r, g, b, 1.0f),
             metallic = 0.0f,
-            roughness = 0.4f
+            roughness = 0.3f
         )
     }
 
-    fun update(corners: List<Position>, newColor: Int? = null) {
-        if (corners.size != 8) return
-
-        // Update color if provided
-        if (newColor != null && newColor != color) {
-            color = newColor
-            // Recreate material with new color
-            materialInstance?.let { engine.destroyMaterialInstance(it) }
-            createMaterial()
-            // Rebuild renderable with new material
-            if (renderableEntity != 0) {
-                RenderableManager.Builder(1)
-                    .boundingBox(Box(0f, 0f, 0f, 100f, 100f, 100f))
-                    .geometry(0, RenderableManager.PrimitiveType.LINES, vertexBuffer!!, indexBuffer!!)
-                    .material(0, materialInstance!!)
-                    .culling(false)
-                    .build(engine, this.entity)
-            }
-        }
-
-        val floatData = FloatArray(8 * 3)
-        for (i in 0 until 8) {
-            floatData[i * 3] = corners[i].x
-            floatData[i * 3 + 1] = corners[i].y
-            floatData[i * 3 + 2] = corners[i].z
-        }
+    // Update the point position (called when node is positioned)
+    fun updatePosition() {
+        // Create simple cross pattern (horizontal + vertical lines) - FLAT on ground (XZ plane)
+        // Both lines are in the XZ plane (Y=0) so they appear flat when viewed from above
+        // This is a LINES primitive, NOT a cylinder - just two perpendicular lines
+        val halfSize = pointSize / 2f
+        val floatData = floatArrayOf(
+            // Horizontal line (along X axis) - flat on ground
+            -halfSize, 0f, 0f,
+            halfSize, 0f, 0f,
+            // Vertical line (along Z axis) - flat on ground, perpendicular to X line
+            0f, 0f, -halfSize,
+            0f, 0f, halfSize
+        )
 
         val vertexData = ByteBuffer.allocateDirect(floatData.size * 4)
             .order(ByteOrder.nativeOrder())
             .asFloatBuffer()
             .put(floatData)
-        
+
         vertexBuffer!!.setBufferAt(engine, 0, vertexData.rewind())
 
         if (renderableEntity == 0) {
+            // Create renderable using LINES primitive - this is NOT a cylinder
             RenderableManager.Builder(1)
-                .boundingBox(Box(0f, 0f, 0f, 100f, 100f, 100f))
+                .boundingBox(Box(0f, 0f, 0f, pointSize, 0.01f, pointSize)) // Very thin bounding box
                 .geometry(0, RenderableManager.PrimitiveType.LINES, vertexBuffer!!, indexBuffer!!)
                 .material(0, materialInstance!!)
                 .culling(false)
@@ -115,12 +101,11 @@ class WireframeNode(
             renderableEntity = this.entity
         }
     }
-    
+
     override fun destroy() {
         super.destroy()
-        engine.destroyVertexBuffer(vertexBuffer!!)
-        engine.destroyIndexBuffer(indexBuffer!!)
-        // Material instance is managed by loader? Or we should destroy it?
-        engine.destroyMaterialInstance(materialInstance!!)
+        vertexBuffer?.let { engine.destroyVertexBuffer(it) }
+        indexBuffer?.let { engine.destroyIndexBuffer(it) }
+        materialInstance?.let { engine.destroyMaterialInstance(it) }
     }
 }
