@@ -1960,7 +1960,12 @@ class ArView(
                 }
 
                 if (boundingBoxNode == null) {
-                    boundingBoxNode = WireframeNode(sceneView.context, sceneView.engine, colorInt)
+                    boundingBoxNode = WireframeNode(
+                        sceneView.context,
+                        sceneView.engine,
+                        colorInt,
+                        lineCount = 4 // Draw 4 parallel lines per edge for thickness
+                    )
                     sceneView.addChildNode(boundingBoxNode!!)
                 }
 
@@ -1996,7 +2001,8 @@ class ArView(
                     lengthLineNode = SimpleLineNode(
                         sceneView.context,
                         sceneView.engine,
-                        colorInt
+                        colorInt,
+                        lineCount = 4 // Draw 4 parallel lines for thickness
                     )
                     sceneView.addChildNode(lengthLineNode!!)
                 } else {
