@@ -100,6 +100,7 @@ class ArView(
     private val lineNodes = mutableListOf<Node>()
     private var boundingBoxNode: WireframeNode? = null
     private var lengthLineNode: SimpleLineNode? = null
+    private val groundPointNodes = mutableListOf<Node>() // Track ground point markers
 
 
     private class PointCloudNode(
@@ -2024,6 +2025,7 @@ class ArView(
                 val pointNode = GroundPointNode(sceneView.context, sceneView.engine, colorInt)
                 pointNode.position = pos
                 sceneView.addChildNode(pointNode)
+                groundPointNodes.add(pointNode) // Track the node for cleanup
                 
                 result.success(true)
             }
@@ -2056,6 +2058,13 @@ class ArView(
                     it.destroy()
                 }
                 lengthLineNode = null
+                
+                // Clear all ground point markers
+                groundPointNodes.forEach { node ->
+                    sceneView.removeChildNode(node)
+                    node.destroy()
+                }
+                groundPointNodes.clear()
                 
                 result.success(true)
             }
