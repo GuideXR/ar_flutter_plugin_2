@@ -2,7 +2,9 @@ group 'com.uhg0.ar_flutter_plugin_2'
 version '1.0-SNAPSHOT'
 
 buildscript {
-    ext.kotlin_version = '1.9.10'
+    // Kotlin 2.0.21 and AGP 8.5.1+ are required for arsceneview 2.3.x and
+    // for the shipped native libs (.so) to be 16 KB–ELF aligned.
+    ext.kotlin_version = '2.0.21'
     repositories {
         mavenLocal()
         google()
@@ -10,7 +12,7 @@ buildscript {
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.3.2'
+        classpath 'com.android.tools.build:gradle:8.5.2'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
@@ -27,7 +29,7 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 android {
-    compileSdk 34
+    compileSdk 35
     namespace 'com.uhg0.ar_flutter_plugin_2'
 
     compileOptions {
@@ -45,12 +47,22 @@ android {
 
     defaultConfig {
         minSdkVersion 28
-        targetSdkVersion 34
+        targetSdkVersion 35
+    }
+
+    // 16 KB page size: keep .so files uncompressed so the app APK can
+    // zip-align them on a 16 KB boundary (AGP 8.5.1+ default).
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 }
 
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
-    implementation 'io.github.sceneview:arsceneview:2.2.1'
+    // arsceneview 2.3.0 (Apr 2025) ships Filament 1.56 with 16 KB–aligned
+    // libfilament-jni.so / libfilament-utils-jni.so / libgltfio-jni.so.
+    implementation 'io.github.sceneview:arsceneview:2.3.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 }

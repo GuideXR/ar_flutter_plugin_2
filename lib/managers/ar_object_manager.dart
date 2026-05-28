@@ -112,8 +112,16 @@ class ARObjectManager {
   }
 
   /// Sets up the AR Object Manager
-  onInitialize() {
-    _channel.invokeMethod<void>('init', {});
+  Future<void> onInitialize() async {
+    try {
+      await _channel.invokeMethod<void>('init', {});
+    } on MissingPluginException catch (e) {
+      // Native channel not yet registered — safe to ignore; the platform view
+      // will initialise on its own once the native side is ready.
+      if (debug) print('ARObjectManager init: channel not ready yet — $e');
+    } catch (_) {
+      // ignore unexpected init errors
+    }
   }
 
   /// Add given node to the given anchor of the underlying AR scene (or to its top-level if no anchor is given) and listen to any changes made to its transformation
@@ -133,7 +141,7 @@ class ARObjectManager {
       } else {
         return await _channel.invokeMethod<bool>('addNode', node.toMap());
       }
-    } on PlatformException catch (e) {
+    } on PlatformException {
       return false;
     }
   }
