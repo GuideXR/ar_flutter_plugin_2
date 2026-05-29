@@ -1619,8 +1619,10 @@ class ArView(
     }
 
     private fun handleCaptureRawImage(result: MethodChannel.Result) {
-        try {
-            mainScope.launch {
+        mainScope.launch {
+            // NOTE: try-catch must be INSIDE the coroutine body.
+            // The outer scope cannot catch exceptions thrown inside launch{}.
+            try {
                 val frame = sceneView.session?.update()
                 val image = frame?.acquireCameraImage()
                 if (image != null) {
@@ -1656,9 +1658,12 @@ class ArView(
                 } else {
                     result.error("NO_CAMERA_IMAGE", "Camera image not available", null)
                 }
+            } catch (e: com.google.ar.core.exceptions.NotYetAvailableException) {
+                // Frame not ready yet — return a retryable error instead of crashing.
+                result.error("NOT_YET_AVAILABLE", "Camera frame not ready, please try again", null)
+            } catch (e: Exception) {
+                result.error("CAPTURE_RAW_IMAGE_ERROR", e.message, null)
             }
-        } catch (e: Exception) {
-            result.error("CAPTURE_RAW_IMAGE_ERROR", e.message, null)
         }
     }
 
