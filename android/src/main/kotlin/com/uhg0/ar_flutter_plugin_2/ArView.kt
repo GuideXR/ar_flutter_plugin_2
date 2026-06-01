@@ -98,8 +98,13 @@ class ArView(
     private var lookAtNodeName: String? = null
     private var boundingBoxCubeNode: Node? = null
     private val lineNodes = mutableListOf<Node>()
-    private var boundingBoxNode: WireframeNode? = null
-    private var lengthLineNode: SimpleLineNode? = null
+    // Cylinder-tube based wireframe: 12 edges, one CylinderNode each.
+    // Replaces WireframeNode (parallel PrimitiveType.LINES) — cylinders are
+    // proper 3-D world-space objects with consistent visual width at any
+    // distance, no screen-space aliasing, and need only 1 object per edge.
+    private val boundingBoxEdgeCylinders = mutableListOf<CylinderNode>()
+    // Single-cylinder length-line — replaces SimpleLineNode (parallel LINES).
+    private var lengthLineCylinder: CylinderNode? = null
     private val groundPointNodes = mutableListOf<Node>() // Track ground point markers
 
 
@@ -1945,37 +1950,137 @@ class ArView(
         }
     }
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // Cylinder-tube helpers
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Computes Euler XYZ rotation angles (degrees) that rotate the default
+     * cylinder orientation (height along local +Y) so that +Y points along
+     * the given unit direction vector [d].
+     *
+     * Derivation: quaternion from (0,1,0) → d, then quaternion → Euler XYZ.
+     * Verified against SceneView's axis-visualization convention:
+     *   d = (+1,0,0) → Rotation(0, 0, −90°)   [X axis]
+     *   d = (0,0,+1) → Rotation(90, 0, 0)      [Z axis]  (matches ArView axis code)
+     */
+    private fun eulerAnglesForCylinderEdge(dx: Float, dy: Float, dz: Float): Triple<Float, Float, Float> {
+        val dot = dy.toDouble()          // dot((0,1,0), d) = dy  (d is unit)
+        val qw: Double; val qx: Double; val qy: Double; val qz: Double
+        when {
+            dot > 0.9999 -> { qw = 1.0; qx = 0.0; qy = 0.0; qz = 0.0 } // identity
+            dot < -0.9999 -> { qw = 0.0; qx = 1.0; qy = 0.0; qz = 0.0 } // 180° around X
+            else -> {
+                // axis = normalize(cross((0,1,0), d)) = normalize((-dz, 0, dx))
+                val cLen = kotlin.math.sqrt(dx * dx + dz * dz).toDouble()
+                // Guard: if cLen is near zero the direction is degenerate (all-zero
+                // input); treat as identity so we never produce NaN quaternion values.
+                if (cLen < 1e-7) return Triple(0f, 0f, 0f)
+                val angle = kotlin.math.acos(dot.coerceIn(-1.0, 1.0))
+                val sh = kotlin.math.sin(angle / 2)
+                val ch = kotlin.math.cos(angle / 2)
+                qw = ch
+                qx = (-dz / cLen) * sh
+                qy = 0.0
+                qz = (dx / cLen) * sh
+            }
+        }
+        val pitch = Math.toDegrees(kotlin.math.atan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy))).toFloat()
+        val yaw   = Math.toDegrees(kotlin.math.asin((2 * (qw * qy - qz * qx)).coerceIn(-1.0, 1.0))).toFloat()
+        val roll  = Math.toDegrees(kotlin.math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))).toFloat()
+        return Triple(pitch, yaw, roll)
+    }
+
+    /**
+     * Allocates a unit-height (1 m) CylinderNode with the given material.
+     * The actual edge length is applied via Y-axis scale on every update so
+     * the node can be reused without destroying/recreating Filament geometry.
+     */
+    private fun allocateEdgeCylinder(r: Float, g: Float, b: Float): CylinderNode {
+        val mat = MaterialLoader(sceneView.engine, viewContext).createColorInstance(
+            color = colorOf(r, g, b, 1.0f),
+            metallic = 0.0f,
+            roughness = 0.1f,
+        )
+        return CylinderNode(
+            engine = sceneView.engine,
+            radius = 0.005f,   // 5 mm radius → 10 mm visual diameter
+            height = 1.0f,     // unit height — real length applied via scale
+            materialInstance = mat,
+        )
+    }
+
+    /**
+     * Moves and re-orients an existing CylinderNode to span [start]→[end].
+     * No Filament allocations — only transform updates.
+     */
+    private fun positionEdgeCylinder(node: CylinderNode, start: ScenePosition, end: ScenePosition) {
+        val dx = end.x - start.x
+        val dy = end.y - start.y
+        val dz = end.z - start.z
+        val rawLength = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+        if (rawLength < 0.001f) {
+            // Zero-length edge (e.g. flat rect phase where base == top).
+            // Hide the node and skip — avoids NaN in the direction math which
+            // would corrupt the Filament transform and prevent recovery later.
+            node.isVisible = false
+            return
+        }
+        node.isVisible = true
+        val length = rawLength
+        node.position = ScenePosition((start.x + end.x) / 2f, (start.y + end.y) / 2f, (start.z + end.z) / 2f)
+        node.scale = Scale(1f, length, 1f)  // stretch unit cylinder to real edge length
+        val (pitch, yaw, roll) = eulerAnglesForCylinderEdge(dx / length, dy / length, dz / length)
+        node.rotation = Rotation(pitch, yaw, roll)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+
     private fun handleUpdateBoundingBox(args: Map<String, Any>, result: MethodChannel.Result) {
         try {
             mainScope.launch {
                 val corners = args["corners"] as? List<Map<String, Double>>
                 val colorInt = (args["color"] as? Int) ?: 0xFFFFFF
-                
+
                 if (corners == null || corners.size != 8) {
                     result.error("INVALID_ARGS", "8 corners required", null)
                     return@launch
                 }
 
-                val cornerPositions = corners.map { 
+                val p = corners.map {
                     ScenePosition(
                         it["x"]?.toFloat() ?: 0f,
                         it["y"]?.toFloat() ?: 0f,
-                        it["z"]?.toFloat() ?: 0f
+                        it["z"]?.toFloat() ?: 0f,
                     )
                 }
 
-                if (boundingBoxNode == null) {
-                    boundingBoxNode = WireframeNode(
-                        sceneView.context,
-                        sceneView.engine,
-                        colorInt,
-                        lineCount = 4 // Draw 4 parallel lines per edge for thickness
-                    )
-                    sceneView.addChildNode(boundingBoxNode!!)
+                val r = ((colorInt shr 16) and 0xFF) / 255f
+                val g = ((colorInt shr 8)  and 0xFF) / 255f
+                val b = (colorInt          and 0xFF) / 255f
+
+                // 12 edges: 4 base, 4 top, 4 vertical pillars
+                val edgePairs = listOf(
+                    p[0] to p[1], p[1] to p[2], p[2] to p[3], p[3] to p[0], // base
+                    p[4] to p[5], p[5] to p[6], p[6] to p[7], p[7] to p[4], // top
+                    p[0] to p[4], p[1] to p[5], p[2] to p[6], p[3] to p[7], // vertical
+                )
+
+                // FIRST call: allocate the 12 nodes and add them to the scene ONCE.
+                // Subsequent calls: just reposition the existing nodes — zero
+                // Filament allocations, no GPU memory churn.
+                if (boundingBoxEdgeCylinders.isEmpty()) {
+                    repeat(12) {
+                        val cyl = allocateEdgeCylinder(r, g, b)
+                        sceneView.addChildNode(cyl)
+                        boundingBoxEdgeCylinders.add(cyl)
+                    }
                 }
 
-                // Update with new color to ensure white lines
-                boundingBoxNode?.update(cornerPositions, colorInt)
+                edgePairs.forEachIndexed { i, (start, end) ->
+                    positionEdgeCylinder(boundingBoxEdgeCylinders[i], start, end)
+                }
+
                 result.success(true)
             }
         } catch (e: Exception) {
@@ -1994,25 +2099,25 @@ class ArView(
                 val startPos = ScenePosition(
                     start?.get("x")?.toFloat() ?: 0f,
                     start?.get("y")?.toFloat() ?: 0f,
-                    start?.get("z")?.toFloat() ?: 0f
+                    start?.get("z")?.toFloat() ?: 0f,
                 )
                 val endPos = ScenePosition(
                     end?.get("x")?.toFloat() ?: 0f,
                     end?.get("y")?.toFloat() ?: 0f,
-                    end?.get("z")?.toFloat() ?: 0f
+                    end?.get("z")?.toFloat() ?: 0f,
                 )
 
-                if (lengthLineNode == null) {
-                    lengthLineNode = SimpleLineNode(
-                        sceneView.context,
-                        sceneView.engine,
-                        colorInt,
-                        lineCount = 4 // Draw 4 parallel lines for thickness
-                    )
-                    sceneView.addChildNode(lengthLineNode!!)
-                } else {
-                    lengthLineNode?.update(startPos, endPos)
+                val r = ((colorInt shr 16) and 0xFF) / 255f
+                val g = ((colorInt shr 8)  and 0xFF) / 255f
+                val b = (colorInt          and 0xFF) / 255f
+
+                // Allocate the node ONCE; subsequent calls just reposition it.
+                if (lengthLineCylinder == null) {
+                    lengthLineCylinder = allocateEdgeCylinder(r, g, b)
+                    sceneView.addChildNode(lengthLineCylinder!!)
                 }
+                positionEdgeCylinder(lengthLineCylinder!!, startPos, endPos)
+
                 result.success(true)
             }
         } catch (e: Exception) {
@@ -2058,17 +2163,19 @@ class ArView(
                 }
                 lineNodes.clear()
                 
-                boundingBoxNode?.let {
+                // Destroy all 12 bounding-box edge cylinders
+                boundingBoxEdgeCylinders.forEach { edge ->
+                    sceneView.removeChildNode(edge)
+                    edge.destroy()
+                }
+                boundingBoxEdgeCylinders.clear()
+
+                // Destroy length-line cylinder
+                lengthLineCylinder?.let {
                     sceneView.removeChildNode(it)
                     it.destroy()
                 }
-                boundingBoxNode = null
-                
-                lengthLineNode?.let {
-                    sceneView.removeChildNode(it)
-                    it.destroy()
-                }
-                lengthLineNode = null
+                lengthLineCylinder = null
                 
                 // Clear all ground point markers
                 groundPointNodes.forEach { node ->
