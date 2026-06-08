@@ -17,6 +17,7 @@ import androidx.lifecycle.Lifecycle
 import com.google.ar.core.Anchor.CloudAnchorState
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
+import com.google.ar.core.LightEstimate
 import com.google.ar.core.Plane
 import com.google.ar.core.Pose
 import com.google.ar.core.TrackingState
@@ -108,6 +109,13 @@ class ArView(
     private val groundPointNodes = mutableListOf<Node>() // Track ground point markers
     // Snail-trail flat-disc markers — one per successful capture, capped at 60.
     private val trailMarkerNodes = mutableListOf<CylinderNode>()
+
+    // ── AR quality (tracking + lighting) — cached each frame, pulled by Dart ──
+    // "TRACKING" / "PAUSED" / "STOPPED" (ARCore TrackingState.name).
+    private var lastCameraTrackingState: String = "STOPPED"
+    // Ambient brightness from the HDR ambient spherical-harmonics DC term
+    // (average of the 3 channels). Higher = brighter. -1 = not yet valid.
+    private var lastLightIntensity: Float = -1f
 
 
     private class PointCloudNode(
@@ -218,6 +226,14 @@ class ArView(
                     } ?: result.error("INVALID_ARGUMENTS", "Position data required", null)
                 }
                 "clearTrailMarkers" -> handleClearTrailMarkers(result)
+                "getTrackingInfo" -> {
+                    result.success(
+                        mapOf(
+                            "trackingState" to lastCameraTrackingState,
+                            "lightIntensity" to lastLightIntensity.toDouble(),
+                        )
+                    )
+                }
                 else -> result.notImplemented()
             }
         }
@@ -245,7 +261,12 @@ class ArView(
                 config.apply {
                     depthMode = Config.DepthMode.DISABLED
                     instantPlacementMode = Config.InstantPlacementMode.DISABLED
-                    lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                    // AMBIENT_INTENSITY is the correct (and lighter) mode for
+                    // this app's matte solid-color AR objects — it skips the
+                    // HDR cubemap work nothing here uses, and exposes a clean
+                    // getPixelIntensity() brightness value (~0..1) for the
+                    // low-light scan warning.
+                    lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
                     focusMode = Config.FocusMode.AUTO
                     planeFindingMode = Config.PlaneFindingMode.DISABLED
                 }
@@ -497,6 +518,19 @@ class ArView(
                     try {
                         if (!isSessionPaused) {
                             session?.update()?.let { frame ->
+                                // Cache AR-quality signals for Dart to pull.
+                                // Cheap: one enum read + one float read.
+                                try {
+                                    lastCameraTrackingState = frame.camera.trackingState.name
+                                    val le = frame.lightEstimate
+                                    if (le.state == LightEstimate.State.VALID) {
+                                        // AMBIENT_INTENSITY mode: pixelIntensity is the
+                                        // documented average scene brightness (~0..1,
+                                        // ~0.5 = normal light). Lower = darker.
+                                        lastLightIntensity = le.pixelIntensity
+                                    }
+                                } catch (_: Exception) {}
+
                                 if (showAnimatedGuide) {
                                     frame.getUpdatedTrackables(Plane::class.java).forEach { plane ->
                                         if (plane.trackingState == TrackingState.TRACKING) {
