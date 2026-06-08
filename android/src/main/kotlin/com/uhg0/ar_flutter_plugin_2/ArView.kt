@@ -106,6 +106,8 @@ class ArView(
     // Single-cylinder length-line — replaces SimpleLineNode (parallel LINES).
     private var lengthLineCylinder: CylinderNode? = null
     private val groundPointNodes = mutableListOf<Node>() // Track ground point markers
+    // Snail-trail flat-disc markers — one per successful capture, capped at 60.
+    private val trailMarkerNodes = mutableListOf<CylinderNode>()
 
 
     private class PointCloudNode(
@@ -209,6 +211,13 @@ class ArView(
                 "removePrimitiveCube" -> {
                     handleRemovePrimitiveCube(result)
                 }
+                "addTrailMarker" -> {
+                    val args = call.arguments as? Map<String, Any>
+                    args?.let {
+                        handleAddTrailMarker(it, result)
+                    } ?: result.error("INVALID_ARGUMENTS", "Position data required", null)
+                }
+                "clearTrailMarkers" -> handleClearTrailMarkers(result)
                 else -> result.notImplemented()
             }
         }
@@ -2189,6 +2198,66 @@ class ArView(
         } catch (e: Exception) {
             Log.e(TAG, "Error clearing lines", e)
             result.error("CLEAR_ERROR", e.message, null)
+        }
+    }
+
+    // ── AR Snail-Trail ────────────────────────────────────────────────────────
+
+    /**
+     * Places a small flat green disc (CylinderNode, radius=4 cm, height=1.5 cm)
+     * at the given world position. Caps the list at 60 nodes — the oldest is
+     * destroyed when the limit is exceeded to keep GPU memory bounded.
+     */
+    private fun handleAddTrailMarker(args: Map<String, Any>, result: MethodChannel.Result) {
+        mainScope.launch {
+            try {
+                val x = (args["x"] as? Double)?.toFloat() ?: 0f
+                val y = (args["y"] as? Double)?.toFloat() ?: 0f
+                val z = (args["z"] as? Double)?.toFloat() ?: 0f
+
+                val mat = MaterialLoader(sceneView.engine, viewContext).createColorInstance(
+                    color = colorOf(0.18f, 0.80f, 0.44f, 0.70f), // green 70 % opacity
+                    metallic = 0.0f,
+                    roughness = 0.6f,
+                )
+                val marker = CylinderNode(
+                    engine = sceneView.engine,
+                    radius = 0.025f,  // 2.5 cm radius — small, doesn't obscure the pile
+                    height = 0.015f,  // flat disc
+                    materialInstance = mat,
+                )
+                marker.position = ScenePosition(x, y, z)
+                sceneView.addChildNode(marker)
+                trailMarkerNodes.add(marker)
+
+                // Cap at 60 markers — remove oldest when exceeded
+                if (trailMarkerNodes.size > 60) {
+                    val oldest = trailMarkerNodes.removeAt(0)
+                    sceneView.removeChildNode(oldest)
+                    oldest.destroy()
+                }
+                result.success(null)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error adding trail marker", e)
+                result.error("TRAIL_MARKER_ERROR", e.message, null)
+            }
+        }
+    }
+
+    /** Removes and destroys all trail marker nodes (called on resetScene). */
+    private fun handleClearTrailMarkers(result: MethodChannel.Result) {
+        mainScope.launch {
+            try {
+                trailMarkerNodes.forEach { node ->
+                    sceneView.removeChildNode(node)
+                    node.destroy()
+                }
+                trailMarkerNodes.clear()
+                result.success(null)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error clearing trail markers", e)
+                result.error("TRAIL_CLEAR_ERROR", e.message, null)
+            }
         }
     }
 }
