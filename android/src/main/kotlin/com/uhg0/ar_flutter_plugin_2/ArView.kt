@@ -51,6 +51,7 @@ import io.github.sceneview.math.Rotation as SceneRotation
 import io.github.sceneview.math.Scale as SceneScale
 import io.github.sceneview.math.colorOf
 import io.github.sceneview.loaders.MaterialLoader
+import com.google.ar.core.exceptions.CameraNotAvailableException
 import com.google.ar.core.exceptions.SessionPausedException
 import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.math.Direction
@@ -72,7 +73,23 @@ class ArView(
     private val TAG: String = ArView::class.java.name
     private val viewContext: Context = context
     private var sceneView: ARSceneView
-    private val mainScope = CoroutineScope(Dispatchers.Main)
+    // CoroutineExceptionHandler: many method-channel handlers do their work
+    // inside mainScope.launch { ... }. A try/catch wrapped around the launch
+    // call itself (the pattern used throughout this file) does NOT catch
+    // exceptions thrown inside the coroutine body — launch returns
+    // immediately and the exception later escapes to the main looper,
+    // killing the whole app. Observed in production: Dart sent clearLines
+    // after Sceneview's lifecycle observer had already destroyed the
+    // Filament engine (rapid background/foreground churn recreating the
+    // platform view), and sceneView.removeChildNode threw
+    // "IllegalStateException: Calling method on destroyed Scene" — a fatal
+    // crash for what should be a harmless no-op on a dead view.
+    private val mainScope = CoroutineScope(
+        Dispatchers.Main +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+                Log.e(TAG, "Uncaught error in ArView coroutine (view likely destroyed)", throwable)
+            }
+    )
     private var worldOriginNode: Node? = null
 
     private val rootLayout: ViewGroup = FrameLayout(context)
@@ -177,9 +194,30 @@ class ArView(
         }
     }
     private fun handleEnableCamera(result: MethodChannel.Result) {
+        // isSessionPaused is flipped to false only AFTER resume() actually
+        // succeeds — it used to be set first, so if resume() threw (see
+        // CameraNotAvailableException handling below), onFrame's
+        // `!isSessionPaused` check would already be true even though the
+        // session never really resumed. Every subsequent frame then hit
+        // SessionPausedException, which onFrame silently swallows — a
+        // permanently black camera with no recovery.
         try {
-            isSessionPaused = false
             sceneView.session?.resume()
+            isSessionPaused = false
+            result.success(null)
+        } catch (e: CameraNotAvailableException) {
+            // Transient: right after returning from background, the OS can
+            // take a moment to fully release the camera back to this app.
+            // Retry once instead of leaving the session stuck.
+            Log.w(TAG, "Camera not available yet on resume, retrying shortly", e)
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    sceneView.session?.resume()
+                    isSessionPaused = false
+                } catch (retryException: Exception) {
+                    Log.e(TAG, "Camera resume retry failed", retryException)
+                }
+            }, 500)
             result.success(null)
         } catch (e: Exception) {
             result.error("ENABLE_CAMERA_ERROR", e.message, null)
@@ -2198,14 +2236,19 @@ class ArView(
      * Clears all drawn lines
      */
     private fun handleClearLines(result: MethodChannel.Result) {
-        try {
-            mainScope.launch {
+        // try/catch lives INSIDE the coroutine — wrapping the launch call
+        // itself (the old pattern) never catches anything thrown in the
+        // body. Node removal against an already-destroyed Scene (rapid
+        // background/foreground churn) throws IllegalStateException; treat
+        // that as a successful no-op since there is nothing left to clear.
+        mainScope.launch {
+            try {
                 lineNodes.forEach { node ->
                     sceneView.removeChildNode(node)
                     node.destroy()
                 }
                 lineNodes.clear()
-                
+
                 // Destroy all 12 bounding-box edge cylinders
                 boundingBoxEdgeCylinders.forEach { edge ->
                     sceneView.removeChildNode(edge)
@@ -2219,19 +2262,26 @@ class ArView(
                     it.destroy()
                 }
                 lengthLineCylinder = null
-                
+
                 // Clear all ground point markers
                 groundPointNodes.forEach { node ->
                     sceneView.removeChildNode(node)
                     node.destroy()
                 }
                 groundPointNodes.clear()
-                
+
                 result.success(true)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "clearLines on destroyed scene — nothing to clear", e)
+                lineNodes.clear()
+                boundingBoxEdgeCylinders.clear()
+                lengthLineCylinder = null
+                groundPointNodes.clear()
+                result.success(true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error clearing lines", e)
+                result.error("CLEAR_ERROR", e.message, null)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error clearing lines", e)
-            result.error("CLEAR_ERROR", e.message, null)
         }
     }
 
